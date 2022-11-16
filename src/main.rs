@@ -139,41 +139,13 @@ fn set_icmp_sequence(buf: *mut u8, config: &Config) {
 }
 
 fn print_address(sa: *const SOCKADDR, len: usize) -> i32 {
-    print!(" dummy ");
-
-    return 0;
-}
-fn print_address_buggy(sa: *const SOCKADDR, len: usize) -> i32 {
-    /* ACCES_VIOLATION/HEAP CORRUPTION exceptions
-    Try 1:
-    let pnodebuffer = vec![0u16; NI_MAXHOST as usize].as_mut_ptr();
-    Try 2:
-    let mut nodebuffer: Vec<MaybeUninit<u16>> = Vec::with_capacity(NI_MAXHOST as usize);
-    unsafe { nodebuffer.set_len(NI_MAXHOST as usize) };
-    Try 3:
-    let pnodebuffer = nodebuffer.as_mut_ptr() as *mut u16;
-    let layout = match Layout::from_size_align(NI_MAXHOST as usize, align_of::<u16>()) {
-        Ok(layout) => layout,
-        Err(e) => {
-            eprintln!("Could not compute layout for {NI_MAXHOST} u16: {e}");
-            return -1;
-        }
-    };
-    let pnodebuffer = unsafe { alloc(layout) } as *mut u16;
-    if pnodebuffer.is_null() {
-        eprintln!(
-            "Could not allocate {} u16 for layout {:?}",
-            NI_MAXHOST, layout
-        );
-        return -1;
-    } */
-    let pnodebuffer = [0u8; NI_MAXHOST as usize].as_mut_ptr();
+    let pnodebuffer = [0u16; NI_MAXHOST as usize].as_mut_ptr();
     let nodebuffersize = NI_MAXHOST;
-    let pservicebuffer = [0u8; NI_MAXSERV as usize].as_mut_ptr();
+    let pservicebuffer = [0u16; NI_MAXSERV as usize].as_mut_ptr();
     let servicebuffersize = NI_MAXSERV;
 
     let rc = unsafe {
-        getnameinfo(
+        GetNameInfoW(
             sa,
             len as i32,
             pnodebuffer,
@@ -185,27 +157,16 @@ fn print_address_buggy(sa: *const SOCKADDR, len: usize) -> i32 {
     };
 
     if rc != 0 {
-        eprintln!("getnameinfo failed: {}", Error::last_os_error());
+        eprintln!("GetNameInfoW failed: {}", Error::last_os_error());
         return rc;
     }
 
-    /* UTF-16 version
     let host = unsafe { WideCString::from_ptr_str(pnodebuffer).to_string().unwrap() };
     let serv = unsafe {
         WideCString::from_ptr_str(pservicebuffer)
             .to_string()
             .unwrap()
     };
-    */
-    let host = std::str::from_utf8(unsafe {
-        std::slice::from_raw_parts(pnodebuffer, nodebuffersize as usize)
-    })
-    .expect("invalid UTF-8");
-
-    let serv = std::str::from_utf8(unsafe {
-        std::slice::from_raw_parts(pservicebuffer, servicebuffersize as usize)
-    })
-    .expect("invalid UTF-8");
 
     if serv != "0" {
         if (unsafe { (*sa).sa_family } == AF_INET as u16) {
@@ -216,11 +177,6 @@ fn print_address_buggy(sa: *const SOCKADDR, len: usize) -> i32 {
     } else {
         print!("{}", host);
     }
-
-    /* this does not solve the ACCESS_VIOLATION, it also generates one when the function returns.
-    let _nodebuffer =
-        unsafe { Vec::from_raw_parts(pnodebuffer, nodebuffersize as usize, NI_MAXHOST as usize) };
-     */
 
     NO_ERROR as i32
 }
