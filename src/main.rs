@@ -4,7 +4,7 @@ Anthony Jones and James Ohlund.
 */
 
 use std::{
-    alloc::{alloc, Layout},
+    alloc::{alloc, dealloc, Layout},
     collections::VecDeque,
     ffi::c_void,
     io::{Error, ErrorKind},
@@ -14,13 +14,13 @@ use widestring::WideCString;
 use windows_sys::Win32::{
     Foundation::{HANDLE, NO_ERROR, WAIT_FAILED, WAIT_TIMEOUT},
     Networking::WinSock::{
-        bind, getnameinfo, sendto, setsockopt, socket, GetAddrInfoW, WSACreateEvent,
-        WSAGetLastError, WSAGetOverlappedResult, WSAIoctl, WSARecvFrom, WSAResetEvent, WSAStartup,
-        ADDRESS_FAMILY, ADDRINFOW, AF_INET, AF_INET6, AF_UNSPEC, AI_PASSIVE, INVALID_SOCKET,
-        IPPROTO, IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_ND,
-        IPV6_UNICAST_HOPS, IP_OPTIONS, IP_TTL, NI_MAXHOST, NI_MAXSERV, NI_NUMERICHOST,
-        NI_NUMERICSERV, SIO_ROUTING_INTERFACE_QUERY, SOCKADDR, SOCKADDR_STORAGE, SOCKET,
-        SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA, WSA_IO_PENDING,
+        bind, closesocket, sendto, setsockopt, socket, GetAddrInfoW, GetNameInfoW, WSACloseEvent,
+        WSACreateEvent, WSAGetLastError, WSAGetOverlappedResult, WSAIoctl, WSARecvFrom,
+        WSAResetEvent, WSAStartup, ADDRESS_FAMILY, ADDRINFOW, AF_INET, AF_INET6, AF_UNSPEC,
+        AI_PASSIVE, INVALID_SOCKET, IPPROTO, IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_IP,
+        IPPROTO_IPV6, IPPROTO_ND, IPV6_UNICAST_HOPS, IP_OPTIONS, IP_TTL, NI_MAXHOST, NI_MAXSERV,
+        NI_NUMERICHOST, NI_NUMERICSERV, SIO_ROUTING_INTERFACE_QUERY, SOCKADDR, SOCKADDR_STORAGE,
+        SOCKET, SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA, WSA_IO_PENDING,
     },
     System::{
         SystemInformation::GetTickCount,
