@@ -14,13 +14,13 @@ use widestring::WideCString;
 use windows_sys::Win32::{
     Foundation::{HANDLE, NO_ERROR, WAIT_FAILED, WAIT_TIMEOUT},
     Networking::WinSock::{
-        bind, closesocket, sendto, setsockopt, socket, GetAddrInfoW, GetNameInfoW, WSACloseEvent,
-        WSACreateEvent, WSAGetLastError, WSAGetOverlappedResult, WSAIoctl, WSARecvFrom,
-        WSAResetEvent, WSAStartup, ADDRESS_FAMILY, ADDRINFOW, AF_INET, AF_INET6, AF_UNSPEC,
-        AI_PASSIVE, INVALID_SOCKET, IPPROTO, IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_IP,
-        IPPROTO_IPV6, IPPROTO_ND, IPV6_UNICAST_HOPS, IP_OPTIONS, IP_TTL, NI_MAXHOST, NI_MAXSERV,
-        NI_NUMERICHOST, NI_NUMERICSERV, SIO_ROUTING_INTERFACE_QUERY, SOCKADDR, SOCKADDR_STORAGE,
-        SOCKET, SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA, WSA_IO_PENDING,
+        bind, closesocket, sendto, setsockopt, socket, FreeAddrInfoW, GetAddrInfoW, GetNameInfoW,
+        WSACleanup, WSACloseEvent, WSACreateEvent, WSAGetLastError, WSAGetOverlappedResult,
+        WSAIoctl, WSARecvFrom, WSAResetEvent, WSAStartup, ADDRESS_FAMILY, ADDRINFOW, AF_INET,
+        AF_INET6, AF_UNSPEC, AI_PASSIVE, INVALID_SOCKET, IPPROTO, IPPROTO_ICMP, IPPROTO_ICMPV6,
+        IPPROTO_IP, IPPROTO_IPV6, IPPROTO_ND, IPV6_UNICAST_HOPS, IP_OPTIONS, IP_TTL, NI_MAXHOST,
+        NI_MAXSERV, NI_NUMERICHOST, NI_NUMERICSERV, SIO_ROUTING_INTERFACE_QUERY, SOCKADDR,
+        SOCKADDR_STORAGE, SOCKET, SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA, WSA_IO_PENDING,
     },
     System::{
         SystemInformation::GetTickCount,
@@ -100,10 +100,10 @@ fn checksum(buf: *const u16, packetlen: usize) -> u16 {
 } */
 
 fn compute_icmp_checksum(
-    s: &SOCKET,
+    // s: &SOCKET,
     buf: *mut u8,
     packetlen: usize,
-    dest: *const ADDRINFOW,
+    // dest: *const ADDRINFOW,
     config: &Config,
 ) {
     if config.address_family == AF_INET {
@@ -282,6 +282,7 @@ fn resolve_address(
         ai_next: std::ptr::null_mut() as *mut _,
         ai_addrlen: 0,
     });
+    let phints = Box::into_raw(hints);
 
     let ai = Box::new(ADDRINFOW {
         ai_flags: 0,
@@ -297,18 +298,15 @@ fn resolve_address(
     let res = pai as *mut *mut ADDRINFOW;
 
     unsafe {
-        let rc = GetAddrInfoW(
-            node_name.as_ptr(),
-            service_name.as_ptr(),
-            Box::into_raw(hints),
-            res,
-        );
+        let rc = GetAddrInfoW(node_name.as_ptr(), service_name.as_ptr(), phints, res);
+        let _hints = Box::from_raw(phints); // release the memory
         if rc != 0 {
+            let _ai = Box::from_raw(pai); // release the memory
             return Err(Error::last_os_error());
         }
-    }
+    };
 
-    Ok(res.to_owned())
+    Ok(res)
 }
 
 fn usage(progname: String) {
@@ -583,7 +581,9 @@ fn main() {
     for i in 0..4 {
         // set the sequence number and compute the checksum
         set_icmp_sequence(icmpbuf, &config);
-        compute_icmp_checksum(&s, icmpbuf, packetlen, dest as *const _, &config);
+        compute_icmp_checksum(
+            /* &s, */ icmpbuf, packetlen, /* dest as *const _, */ &config,
+        );
 
         let mut time = unsafe { GetTickCount() };
 
@@ -643,6 +643,9 @@ fn main() {
     }
 
     // cleanup
+    if !dest.is_null() {
+        unsafe { FreeAddrInfoW(dest as *const _) };
+    }
     if s != INVALID_SOCKET {
         unsafe { closesocket(s) };
     }
@@ -652,6 +655,7 @@ fn main() {
     if !icmpbuf.is_null() {
         unsafe { dealloc(icmpbuf, layout) }
     }
+    unsafe { WSACleanup() };
 }
 
 /*
