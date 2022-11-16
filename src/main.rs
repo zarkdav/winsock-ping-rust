@@ -641,7 +641,17 @@ fn main() {
         }
         unsafe { Sleep(1000) };
     }
+
     // cleanup
+    if s != INVALID_SOCKET {
+        unsafe { closesocket(s) };
+    }
+    if recvol.hEvent != WSA_INVALID_EVENT {
+        unsafe { WSACloseEvent(recvol.hEvent) };
+    }
+    if !icmpbuf.is_null() {
+        unsafe { dealloc(icmpbuf, layout) }
+    }
 }
 
 /*
