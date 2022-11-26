@@ -45,6 +45,7 @@ struct IcmpHdr {
     icmp_checksum: c_ushort,
     icmp_id: c_ushort,
     icmp_sequence: c_ushort,
+    icmp_timestamp: c_ulong,
 }
 
 #[repr(C)]
@@ -214,6 +215,7 @@ fn init_icmp_header(buf: *mut u8, len: usize) {
         (*icmp_hdr).icmp_id = std::process::id() as u16;
         (*icmp_hdr).icmp_checksum = 0;
         (*icmp_hdr).icmp_sequence = 0;
+        (*icmp_hdr).icmp_timestamp =  GetTickCount();
 
         let datapart = buf.add(std::mem::size_of::<IcmpHdr>());
         datapart.write_bytes(b'E', len);
