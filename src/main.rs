@@ -284,10 +284,11 @@ fn set_ttl(s: &SOCKET, config: &Config) -> Result<(), Error> {
         _ => return Err(Error::from(ErrorKind::InvalidInput)),
     };
 
-    let ttlp = &config.ttl as *const u8;
+    let ttlp = &config.ttl;
 
     let rc = unsafe { setsockopt(*s, level as i32, optname as i32, ttlp, 1i32) };
     if rc != 0 {
+        eprintln!("could not set TTL: {}", Error::last_os_error());
         return Err(Error::last_os_error());
     }
     Ok(())
