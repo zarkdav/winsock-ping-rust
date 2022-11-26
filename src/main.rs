@@ -566,7 +566,7 @@ fn main() {
     // post the first overlapped receive
     const MAX_RECV_BUFLEN: usize = 0xffff; // large packet size! but that's what the original code used
     let recvbuf_len = MAX_RECV_BUFLEN;
-    let recvbuf = vec![0u8; MAX_RECV_BUFLEN].as_mut_ptr();
+    let recvbuf = [0u8; MAX_RECV_BUFLEN].as_mut_ptr();
     let from = Box::into_raw(Box::new(SOCKADDR {
         sa_family: 0,
         sa_data: [0; 14],
