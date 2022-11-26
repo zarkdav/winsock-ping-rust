@@ -6,21 +6,20 @@ Anthony Jones and James Ohlund.
 use std::{
     alloc::{alloc, dealloc, Layout},
     collections::VecDeque,
-    ffi::c_void,
     io::{Error, ErrorKind},
-    os::raw::{c_uchar, c_ulong, c_ushort},
+    os::raw::{c_uchar, c_ulong, c_ushort}, ffi::CString,
 };
 use widestring::WideCString;
 use windows_sys::Win32::{
     Foundation::{HANDLE, NO_ERROR, WAIT_FAILED, WAIT_TIMEOUT},
     Networking::WinSock::{
-        bind, closesocket, sendto, setsockopt, socket, FreeAddrInfoW, GetAddrInfoW, GetNameInfoW,
+        bind, closesocket, sendto, setsockopt, socket, FreeAddrInfoW, GetNameInfoW,
         WSACleanup, WSACloseEvent, WSACreateEvent, WSAGetLastError, WSAGetOverlappedResult,
-        WSAIoctl, WSARecvFrom, WSAResetEvent, WSAStartup, ADDRESS_FAMILY, ADDRINFOW, AF_INET,
+        WSARecvFrom, WSAResetEvent, WSAStartup, ADDRESS_FAMILY, AF_INET,
         AF_INET6, AF_UNSPEC, AI_PASSIVE, INVALID_SOCKET, IPPROTO, IPPROTO_ICMP, IPPROTO_ICMPV6,
         IPPROTO_IP, IPPROTO_IPV6, IPPROTO_ND, IPV6_UNICAST_HOPS, IP_OPTIONS, IP_TTL, NI_MAXHOST,
-        NI_MAXSERV, NI_NUMERICHOST, NI_NUMERICSERV, SIO_ROUTING_INTERFACE_QUERY, SOCKADDR,
-        SOCKADDR_STORAGE, SOCKET, SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA, WSA_IO_PENDING,
+        NI_MAXSERV, NI_NUMERICHOST, NI_NUMERICSERV, SOCKADDR,
+        SOCKADDR_STORAGE, SOCKET, SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA, WSA_IO_PENDING, getaddrinfo, ADDRINFOA,
     },
     System::{
         SystemInformation::GetTickCount,
@@ -238,8 +237,8 @@ fn post_recvfrom(
     let rc = unsafe { WSARecvFrom(s, wbuf, 1, &mut bytes, &mut flags, from, fromlen, ol, None) };
 
     if rc == SOCKET_ERROR && unsafe { WSAGetLastError() } != WSA_IO_PENDING {
-        eprintln!("WSARecvFrom failed: {}", Error::last_os_error());
-    }
+            eprintln!("WSARecvFrom failed: {}", Error::last_os_error());
+        }
 
     rc
 }
@@ -294,60 +293,47 @@ fn set_ttl(s: &SOCKET, config: &Config) -> Result<(), Error> {
     Ok(())
 }
 
-fn resolve_address(
-    addr: Option<&String>,
-    port: String,
-    af: ADDRESS_FAMILY,
+fn resolve_address<T: AsRef<str> + ?Sized, U: AsRef<str> + ?Sized>(
+    addr: Option<&T>,
+    port: &U,
+    af: &ADDRESS_FAMILY,
     socktype: i32,
     proto: IPPROTO,
-) -> Result<*mut *mut ADDRINFOW, std::io::Error> {
-    let mut service_name: Vec<u16> = port.encode_utf16().collect();
-    service_name.push(0);
-
-    let mut node_name: Vec<u16> = match addr {
-        Some(addr) => addr.encode_utf16().collect(),
-        None => Vec::new(),
+) -> Result<*mut ADDRINFOA, Error> {
+    let service_name = CString::new::<&str>(port.as_ref())?.into_raw() as *const _;
+    let node_name = match addr {
+         Some(addr) => CString::new::<&str>(addr.as_ref())?.into_raw() as *const _,
+         None => std::ptr::null_mut()
     };
-    node_name.push(0);
 
-    let hints = Box::new(ADDRINFOW {
+    let hints = Box::new(ADDRINFOA {
         ai_flags: match addr {
             Some(_) => 0,
             None => AI_PASSIVE as i32,
         },
-        ai_family: af as i32,
+        ai_family: *af as i32,
         ai_socktype: socktype,
         ai_protocol: proto,
-        ai_addr: std::ptr::null_mut() as *mut _,
-        ai_canonname: std::ptr::null_mut() as *mut _,
-        ai_next: std::ptr::null_mut() as *mut _,
+        ai_addr: std::ptr::null_mut(),
+        ai_canonname: std::ptr::null_mut(),
+        ai_next: std::ptr::null_mut(),
         ai_addrlen: 0,
     });
     let phints = Box::into_raw(hints);
 
-    let ai = Box::new(ADDRINFOW {
-        ai_flags: 0,
-        ai_family: af as i32,
-        ai_socktype: socktype,
-        ai_protocol: proto,
-        ai_addr: std::ptr::null_mut() as *mut _,
-        ai_canonname: std::ptr::null_mut() as *mut _,
-        ai_next: std::ptr::null_mut() as *mut _,
-        ai_addrlen: 0,
-    });
-    let pai = Box::into_raw(ai) as *mut ADDRINFOW;
-    let res = pai as *mut *mut ADDRINFOW;
+    let layout = Layout::new::<ADDRINFOA>();
+    let res = unsafe { std::alloc::alloc(layout) } as *mut *mut ADDRINFOA;
 
     unsafe {
-        let rc = GetAddrInfoW(node_name.as_ptr(), service_name.as_ptr(), phints, res);
+        let rc = getaddrinfo(node_name, service_name, phints, res);
         let _hints = Box::from_raw(phints); // release the memory
         if rc != 0 {
-            let _ai = Box::from_raw(pai); // release the memory
+            std::alloc::dealloc(res as *mut u8, layout);
             return Err(Error::last_os_error());
         }
     };
 
-    Ok(res)
+    Ok(unsafe { *res })
 }
 
 fn usage(progname: String) {
@@ -444,8 +430,8 @@ fn main() {
     // resolve the destination address
     let dest = match resolve_address(
         Some(&config.destination),
-        String::from("0"),
-        config.address_family,
+        "0",
+        &config.address_family,
         0,
         0,
     ) {
@@ -456,7 +442,7 @@ fn main() {
         Ok(dest) => dest,
     };
 
-    config.address_family = unsafe { (*(*dest)).ai_family as u32 };
+    config.address_family = unsafe { (*dest).ai_family as u32 };
 
     config.protocol = match config.address_family {
         AF_INET => IPPROTO_ICMP,
@@ -468,15 +454,14 @@ fn main() {
     };
 
     // get the bind address
-    /* This was in the original code and generates the wrong result (first IP address of whichever interface comes first)
-        let local = match resolve_address(None, String::from("0"), config.address_family, 0, 0) {
-            Err(e) => {
-                eprintln!("Unable to obtain the bind address: error {}", e);
-                std::process::exit(-1);
-            }
-            Ok(dest) => dest,
-        };
-    */
+    let local = match resolve_address::<str, _>(None, "0", &config.address_family, 0, 0) {
+        Err(e) => {
+            eprintln!("Unable to obtain the bind address: error {}", e);
+            std::process::exit(-1);
+        }
+        Ok(dest) => dest,
+    };
+
     // create the raw socket
     let s = unsafe {
         socket(
@@ -491,7 +476,6 @@ fn main() {
     }
 
     if set_ttl(&s, &config).is_err() {
-        eprintln!("could not set TTL");
         std::process::exit(-1);
     }
 
@@ -562,33 +546,7 @@ fn main() {
         }
     };
 
-    // obtain the address of the local interface to send to dest
-    let mut src = vec![0u8; 1024].as_mut_ptr();
-    let psrc: *mut c_void = &mut src as *mut _ as *mut c_void;
-    let mut bytes: u32 = 0;
-    let rc = unsafe {
-        WSAIoctl(
-            s,
-            SIO_ROUTING_INTERFACE_QUERY,
-            (*(*dest)).ai_addr as *const _,
-            (*(*dest)).ai_addrlen as u32,
-            psrc,
-            1024,
-            &mut bytes as *mut _,
-            std::ptr::null_mut(),
-            None,
-        )
-    };
-    if rc == SOCKET_ERROR {
-        eprintln!("WSAIoctl failed: {}", Error::last_os_error());
-    }
-
-    // bind the socket
-    // if unsafe { bind(s, (*(*local)).ai_addr, (*(*local)).ai_addrlen as i32) } != 0 {
-
-    let plocal = psrc as *mut SOCKADDR;
-    let local = unsafe { &mut *plocal };
-    if unsafe { bind(s, local, bytes as i32) } != 0 {
+    if unsafe { bind(s, (*local).ai_addr, (*local).ai_addrlen as i32) } != 0 {
         eprintln!("bind failed: {}", Error::last_os_error());
         std::process::exit(-1);
     }
@@ -618,7 +576,7 @@ fn main() {
     post_recvfrom(s, recvbuf, recvbuf_len, from, &mut fromlen, &mut recvol);
 
     print!("\nPinging ");
-    unsafe { print_address((*(*dest)).ai_addr, (*(*dest)).ai_addrlen) };
+    unsafe { print_address((*dest).ai_addr, (*dest).ai_addrlen) };
     println!(" with {} bytes of data\n", config.data_size);
 
     // start sending ICMP requests
@@ -637,8 +595,8 @@ fn main() {
                 icmpbuf,
                 packetlen as i32,
                 0,
-                (*(*dest)).ai_addr,
-                (*(*dest)).ai_addrlen as i32,
+                (*dest).ai_addr,
+                (*dest).ai_addrlen as i32,
             ) as u32
         };
         if rc == SOCKET_ERROR as u32 {
@@ -669,29 +627,32 @@ fn main() {
             unsafe { WSAResetEvent(recvol.hEvent) };
 
             if analyze_packet(recvbuf, &config) == NO_ERROR as i32 {
-            print!("Reply from ");
-            print_address(from, fromlen as usize);
-            if time == 0 {
-                println!(": bytes={} time<1ms TTL={}", config.data_size, config.ttl);
-            } else {
-                println!(
-                    ": bytes={} time={}ms TTL={}",
-                    config.data_size, time, config.ttl
-                );
-            }
+                print!("Reply from ");
+                print_address(from, fromlen as usize);
+                if time == 0 {
+                    println!(": bytes={} time<1ms TTL={}", config.data_size, config.ttl);
+                } else {
+                    println!(
+                        ": bytes={} time={}ms TTL={}",
+                        config.data_size, time, config.ttl
+                    );
+                }
             }
         }
 
-            if i < 3 {
-                post_recvfrom(s, recvbuf, recvbuf_len, from, &mut fromlen, &mut recvol);
-            }
+        if i < 3 {
+            post_recvfrom(s, recvbuf, recvbuf_len, from, &mut fromlen, &mut recvol);
         }
+    
         unsafe { Sleep(1000) };
     }
 
     // cleanup
     if !dest.is_null() {
         unsafe { FreeAddrInfoW(dest as *const _) };
+    }
+    if !local.is_null() {
+        unsafe { std::alloc::dealloc(local as *mut u8, Layout::new::<ADDRINFOA>())}
     }
     if s != INVALID_SOCKET {
         unsafe { closesocket(s) };
