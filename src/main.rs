@@ -71,6 +71,21 @@ struct IpV4OptionHdr {
     opt_addr: [c_ulong; 9],
 }
 
+#[allow(dead_code)]
+#[repr(C)]
+struct IpHdr {
+    ip_verlen: c_uchar,
+    ip_tos: c_uchar,
+    ip_totallength: c_ushort,
+    ip_id: c_ushort,
+    ip_offset: c_ushort,
+    ip_ttl: c_uchar,
+    ip_protocol: c_uchar,
+    ip_checksum: c_ushort,
+    ip_srcaddr: c_ulong,
+    ip_destaddr: c_ulong,
+}
+
 fn checksum(buf: *const u16, packetlen: usize) -> u16 {
     let mut cksum: u32 = 0;
     let mut buf = buf as *mut u16;
@@ -99,6 +114,29 @@ fn checksum(buf: *const u16, packetlen: usize) -> u16 {
     dest: *const ADDRINFOW,
 ) {
 } */
+
+fn analyze_packet(buf: *const u8, config: &Config) -> i32 {
+    if config.address_family == AF_INET {
+        let v4hdr = buf as *const IpHdr;
+        let hdrlen = unsafe { ((*v4hdr).ip_verlen & 0x0f) * 4 };
+
+        if unsafe { (*v4hdr).ip_protocol as i32 } == IPPROTO_ICMP {
+            let icmphdr = unsafe { buf.add(hdrlen as usize) } as *const IcmpHdr;
+            if unsafe { (*icmphdr).icmp_type } != 11 /* ICMPV4_TIMEOUT    */ && 
+               unsafe { (*icmphdr).icmp_type } != 0  /* ICMPV4_REPLY_TYPE */ &&
+               unsafe { (*icmphdr).icmp_code } != 0  /* ICMPV4_REPLY_CODE */ 
+            {
+                
+                eprintln!("unsupported ICMP type {} received.", unsafe {
+                    (*icmphdr).icmp_type
+                });
+                return SOCKET_ERROR;
+            }
+        }
+    }
+
+    NO_ERROR as i32
+}
 
 fn compute_icmp_checksum(
     // s: &SOCKET,
@@ -626,6 +664,7 @@ fn main() {
 
             unsafe { WSAResetEvent(recvol.hEvent) };
 
+            if analyze_packet(recvbuf, &config) == NO_ERROR as i32 {
             print!("Reply from ");
             print_address(from, fromlen as usize);
             if time == 0 {
@@ -636,6 +675,8 @@ fn main() {
                     config.data_size, time, config.ttl
                 );
             }
+            }
+        }
 
             if i < 3 {
                 post_recvfrom(s, recvbuf, recvbuf_len, from, &mut fromlen, &mut recvol);
