@@ -385,6 +385,7 @@ fn validate_args() -> Result<Config, std::io::Error> {
                     },
                     None => return Err(Error::new(ErrorKind::InvalidInput, progname)),
                 },
+                // ttl
                 Some('i') => match args.pop_front() {
                     Some(arg) => {
                         config.ttl = match arg.parse() {
@@ -394,6 +395,7 @@ fn validate_args() -> Result<Config, std::io::Error> {
                     }
                     None => return Err(Error::new(ErrorKind::InvalidInput, progname)),
                 },
+                // payload length
                 Some('l') => match args.pop_front() {
                     Some(arg) => {
                         config.data_size = match arg.parse() {
@@ -403,6 +405,7 @@ fn validate_args() -> Result<Config, std::io::Error> {
                     }
                     None => return Err(Error::new(ErrorKind::InvalidInput, progname)),
                 },
+                // record route
                 Some('b') => config.record_route = true,
                 _ => return Err(Error::new(ErrorKind::InvalidInput, progname)),
             }
