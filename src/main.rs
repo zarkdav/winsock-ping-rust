@@ -7,7 +7,7 @@ use std::{
     alloc::{alloc, dealloc, Layout},
     collections::VecDeque,
     io::{Error, ErrorKind},
-    os::raw::{c_uchar, c_ulong, c_ushort}, ffi::CString,
+    os::raw::{c_uchar, c_ulong, c_ushort}, ffi::CString, mem::MaybeUninit,
 };
 use widestring::WideCString;
 use windows_sys::Win32::{
@@ -19,7 +19,7 @@ use windows_sys::Win32::{
         AF_INET6, AF_UNSPEC, AI_PASSIVE, INVALID_SOCKET, IPPROTO, IPPROTO_ICMP, IPPROTO_ICMPV6,
         IPPROTO_IP, IPPROTO_IPV6, IPPROTO_ND, IPV6_UNICAST_HOPS, IP_OPTIONS, IP_TTL, NI_MAXHOST,
         NI_MAXSERV, NI_NUMERICHOST, NI_NUMERICSERV, SOCKADDR,
-        SOCKADDR_STORAGE, SOCKET, SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA, WSA_IO_PENDING, getaddrinfo, ADDRINFOA,
+        SOCKET, SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA, WSA_IO_PENDING, getaddrinfo, ADDRINFOA,
     },
     System::{
         SystemInformation::GetTickCount,
@@ -346,7 +346,7 @@ fn usage(progname: String) {
     eprintln!("            -r           Record route (IPv4 only)");
 }
 
-fn validate_args() -> Result<Config, std::io::Error> {
+fn validate_args() -> Result<Config, Error> {
     let mut args: VecDeque<String> = std::env::args().collect();
     let mut config = Config {
         address_family: AF_UNSPEC,
@@ -567,11 +567,12 @@ fn main() {
     const MAX_RECV_BUFLEN: usize = 0xffff; // large packet size! but that's what the original code used
     let recvbuf_len = MAX_RECV_BUFLEN;
     let recvbuf = [0u8; MAX_RECV_BUFLEN].as_mut_ptr();
-    let from = Box::into_raw(Box::new(SOCKADDR {
-        sa_family: 0,
-        sa_data: [0; 14],
-    }));
-    let mut fromlen = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
+    // let from = Box::into_raw(Box::new(SOCKADDR {
+    //     sa_family: 0,
+    //     sa_data: [0; 14],
+    // }));
+    let from = MaybeUninit::<SOCKADDR>::zeroed().as_mut_ptr();
+    let mut fromlen = std::mem::size_of::<SOCKADDR>() as i32;
 
     post_recvfrom(s, recvbuf, recvbuf_len, from, &mut fromlen, &mut recvol);
 
