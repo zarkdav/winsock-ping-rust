@@ -6,20 +6,25 @@ Anthony Jones and James Ohlund.
 use std::{
     alloc::{alloc, dealloc, Layout},
     collections::VecDeque,
+    ffi::OsStr,
     io::{Error, ErrorKind},
-    os::raw::{c_uchar, c_ulong, c_ushort}, ffi::CString, mem::MaybeUninit,
+    mem::MaybeUninit,
+    os::{
+        raw::{c_uchar, c_ulong, c_ushort},
+        windows::prelude::OsStrExt,
+    },
 };
 use widestring::WideCString;
 use windows_sys::Win32::{
     Foundation::{HANDLE, NO_ERROR, WAIT_FAILED, WAIT_TIMEOUT},
     Networking::WinSock::{
-        bind, closesocket, sendto, setsockopt, socket, FreeAddrInfoW, GetNameInfoW,
+        bind, closesocket, sendto, setsockopt, socket, FreeAddrInfoW, GetAddrInfoW, GetNameInfoW,
         WSACleanup, WSACloseEvent, WSACreateEvent, WSAGetLastError, WSAGetOverlappedResult,
-        WSARecvFrom, WSAResetEvent, WSAStartup, ADDRESS_FAMILY, AF_INET,
-        AF_INET6, AF_UNSPEC, AI_PASSIVE, INVALID_SOCKET, IPPROTO, IPPROTO_ICMP, IPPROTO_ICMPV6,
-        IPPROTO_IP, IPPROTO_IPV6, IPPROTO_ND, IPV6_UNICAST_HOPS, IP_OPTIONS, IP_TTL, NI_MAXHOST,
-        NI_MAXSERV, NI_NUMERICHOST, NI_NUMERICSERV, SOCKADDR,
-        SOCKET, SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA, WSA_IO_PENDING, getaddrinfo, ADDRINFOA,
+        WSARecvFrom, WSAResetEvent, WSAStartup, ADDRESS_FAMILY, ADDRINFOW, AF_INET, AF_INET6,
+        AF_UNSPEC, AI_PASSIVE, INVALID_SOCKET, IPPROTO, IPPROTO_ICMP, IPPROTO_ICMPV6, IPPROTO_IP,
+        IPPROTO_IPV6, IPPROTO_ND, IPV6_UNICAST_HOPS, IP_OPTIONS, IP_TTL, NI_MAXHOST, NI_MAXSERV,
+        NI_NUMERICHOST, NI_NUMERICSERV, SOCKADDR, SOCKET, SOCKET_ERROR, SOCK_RAW, WSABUF, WSADATA,
+        WSA_IO_PENDING,
     },
     System::{
         SystemInformation::GetTickCount,
@@ -116,16 +121,18 @@ fn checksum(buf: *const u16, packetlen: usize) -> u16 {
 
 fn analyze_packet(buf: *const u8, config: &Config) -> i32 {
     if config.address_family == AF_INET {
+        const ICMPV4_TIMEOUT: u8 = 11;
+        const ICMPV4_REPLY_TYPE: u8 = 0;
+        const ICMPV4_REPLY_CODE: u8 = 0;
         let v4hdr = buf as *const IpHdr;
         let hdrlen = unsafe { ((*v4hdr).ip_verlen & 0x0f) * 4 };
 
         if unsafe { (*v4hdr).ip_protocol as i32 } == IPPROTO_ICMP {
             let icmphdr = unsafe { buf.add(hdrlen as usize) } as *const IcmpHdr;
-            if unsafe { (*icmphdr).icmp_type } != 11 /* ICMPV4_TIMEOUT    */ && 
-               unsafe { (*icmphdr).icmp_type } != 0  /* ICMPV4_REPLY_TYPE */ &&
-               unsafe { (*icmphdr).icmp_code } != 0  /* ICMPV4_REPLY_CODE */ 
+            if unsafe { (*icmphdr).icmp_type } != ICMPV4_TIMEOUT
+                && unsafe { (*icmphdr).icmp_type } != ICMPV4_REPLY_TYPE
+                && unsafe { (*icmphdr).icmp_code } != ICMPV4_REPLY_CODE
             {
-                
                 eprintln!("unsupported ICMP type {} received.", unsafe {
                     (*icmphdr).icmp_type
                 });
@@ -227,18 +234,16 @@ fn post_recvfrom(
     fromlen: &mut i32,
     ol: &mut OVERLAPPED,
 ) -> i32 {
-    let mut bytes: u32 = 0;
-    let mut flags: u32 = 0;
-    let wbuf = Box::into_raw(Box::new(WSABUF {
+    let wbuf = WSABUF {
         buf,
         len: buflen as u32,
-    }));
+    };
 
-    let rc = unsafe { WSARecvFrom(s, wbuf, 1, &mut bytes, &mut flags, from, fromlen, ol, None) };
+    let rc = unsafe { WSARecvFrom(s, &wbuf, 1, &mut 0, &mut 0, from, fromlen, ol, None) };
 
     if rc == SOCKET_ERROR && unsafe { WSAGetLastError() } != WSA_IO_PENDING {
-            eprintln!("WSARecvFrom failed: {}", Error::last_os_error());
-        }
+        eprintln!("WSARecvFrom failed: {}", Error::last_os_error());
+    }
 
     rc
 }
@@ -252,7 +257,7 @@ fn init_icmp_header(buf: *mut u8, len: usize) {
         (*icmp_hdr).icmp_id = std::process::id() as u16;
         (*icmp_hdr).icmp_checksum = 0;
         (*icmp_hdr).icmp_sequence = 0;
-        (*icmp_hdr).icmp_timestamp =  GetTickCount();
+        (*icmp_hdr).icmp_timestamp = GetTickCount();
 
         let datapart = buf.add(std::mem::size_of::<IcmpHdr>());
         datapart.write_bytes(b'E', len);
@@ -296,44 +301,44 @@ fn set_ttl(s: &SOCKET, config: &Config) -> Result<(), Error> {
 fn resolve_address<T: AsRef<str> + ?Sized, U: AsRef<str> + ?Sized>(
     addr: Option<&T>,
     port: &U,
-    af: &ADDRESS_FAMILY,
+    af: ADDRESS_FAMILY,
     socktype: i32,
     proto: IPPROTO,
-) -> Result<*mut ADDRINFOA, Error> {
-    let service_name = CString::new::<&str>(port.as_ref())?.into_raw() as *const _;
-    let node_name = match addr {
-         Some(addr) => CString::new::<&str>(addr.as_ref())?.into_raw() as *const _,
-         None => std::ptr::null_mut()
+) -> Result<*const ADDRINFOW, Error> {
+    let mut service_name: Vec<u16> = OsStr::new(port.as_ref()).encode_wide().collect();
+    service_name.push(0);
+    let mut node_name = match addr {
+        Some(addr) => OsStr::new(addr.as_ref()).encode_wide().collect(),
+        None => Vec::new(),
     };
+    node_name.push(0);
 
-    let hints = Box::new(ADDRINFOA {
+    let hints = ADDRINFOW {
         ai_flags: match addr {
             Some(_) => 0,
             None => AI_PASSIVE as i32,
         },
-        ai_family: *af as i32,
+        ai_family: af as i32,
         ai_socktype: socktype,
         ai_protocol: proto,
         ai_addr: std::ptr::null_mut(),
         ai_canonname: std::ptr::null_mut(),
         ai_next: std::ptr::null_mut(),
         ai_addrlen: 0,
-    });
-    let phints = Box::into_raw(hints);
+    };
 
-    let layout = Layout::new::<ADDRINFOA>();
-    let res = unsafe { std::alloc::alloc(layout) } as *mut *mut ADDRINFOA;
+    let layout = Layout::new::<ADDRINFOW>();
+    let pres = unsafe { std::alloc::alloc(layout) } as *mut *mut ADDRINFOW;
 
     unsafe {
-        let rc = getaddrinfo(node_name, service_name, phints, res);
-        let _hints = Box::from_raw(phints); // release the memory
+        let rc = GetAddrInfoW(node_name.as_ptr(), service_name.as_ptr(), &hints, pres);
         if rc != 0 {
-            std::alloc::dealloc(res as *mut u8, layout);
+            FreeAddrInfoW(pres.cast());
             return Err(Error::last_os_error());
         }
     };
 
-    Ok(unsafe { *res })
+    Ok(unsafe { (*pres).cast() })
 }
 
 fn usage(progname: String) {
@@ -418,20 +423,21 @@ fn main() {
 
     // load winsock
     const WINSOCK_VERSION: u16 = 0x202; // 2.2
-    unsafe {
-        let mut wsd: WSADATA = std::mem::zeroed();
-        let rc = WSAStartup(WINSOCK_VERSION, &mut wsd as *mut WSADATA);
-        if rc != 0 {
-            eprintln!("WSAStartup failed: {rc}");
-            std::process::exit(-1);
-        }
+
+    let mut wsd = MaybeUninit::<WSADATA>::zeroed();
+    let rc = unsafe { WSAStartup(WINSOCK_VERSION, wsd.as_mut_ptr()) };
+    unsafe { wsd.assume_init() }; // extracts the WSDATA to ensure it gets dropped (it's not used ATM)
+    if rc != 0 {
+        eprintln!("WSAStartup failed: {rc}");
+        std::process::exit(-1);
     }
 
     // resolve the destination address
     let dest = match resolve_address(
         Some(&config.destination),
         "0",
-        &config.address_family,
+        // &config.address_family,
+        config.address_family,
         0,
         0,
     ) {
@@ -454,7 +460,8 @@ fn main() {
     };
 
     // get the bind address
-    let local = match resolve_address::<str, _>(None, "0", &config.address_family, 0, 0) {
+    // let local = match resolve_address::<str, _>(None, "0", &config.address_family, 0, 0) {
+    let local = match resolve_address::<str, _>(None, "0", config.address_family, 0, 0) {
         Err(e) => {
             eprintln!("Unable to obtain the bind address: error {}", e);
             std::process::exit(-1);
@@ -644,7 +651,7 @@ fn main() {
         if i < 3 {
             post_recvfrom(s, recvbuf, recvbuf_len, from, &mut fromlen, &mut recvol);
         }
-    
+
         unsafe { Sleep(1000) };
     }
 
@@ -653,7 +660,7 @@ fn main() {
         unsafe { FreeAddrInfoW(dest as *const _) };
     }
     if !local.is_null() {
-        unsafe { std::alloc::dealloc(local as *mut u8, Layout::new::<ADDRINFOA>())}
+        unsafe { FreeAddrInfoW(local as *const _) };
     }
     if s != INVALID_SOCKET {
         unsafe { closesocket(s) };
